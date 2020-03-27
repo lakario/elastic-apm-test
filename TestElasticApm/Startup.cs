@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Elastic.Apm;
 using Elastic.Apm.Api;
@@ -45,23 +46,23 @@ namespace TestElasticApm
             {
                 endpoints.MapGet("/", async context =>
                 {
-                    await context.Response.WriteAsync($"<a href=\"/trans1\">Distributed Trans 1</a>");
+                    var output = new StringBuilder();
+                    output.Append("<ul>");
+                    output.Append("<li><a href=\"/trans1/1\">Distributed Transaction 1</a></li>");
+                    output.Append("<li><a href=\"/trans2\">Distributed Transaction 2</a></li>");
+                    output.Append("</ul>");
+
+                    context.Response.ContentType = "text/html";
+                    await context.Response.WriteAsync(output.ToString());
                 });
 
-                endpoints.MapGet("/trans1", async context =>
-                {
-                    await context.Response.WriteAsync($"<a href=\"/trans1/1\">Click here to begin</a>");
-                });
-                
                 endpoints.MapGet("/trans1/1", async context =>
                 {
                     var trans = Agent.Tracer.StartTransaction("Dist Trans 1", ApiConstants.TypeRequest);
 
                     await trans.CaptureSpan("step 1 processing", ApiConstants.ActionExec, async () => await Task.Delay(30));
                     
-                    var trace =
-                        (Agent.Tracer.CurrentSpan?.OutgoingDistributedTracingData
-                         ?? Agent.Tracer.CurrentTransaction?.OutgoingDistributedTracingData).SerializeToString();
+                    var trace = trans.OutgoingDistributedTracingData.SerializeToString();
 
                     await context.Response.WriteAsync($"<a href=\"/trans1/2?s={trace}\">Continue</a>");
                 });
@@ -74,9 +75,7 @@ namespace TestElasticApm
                     
                     await trans.CaptureSpan("step 2 processing", ApiConstants.ActionExec, async () => await Task.Delay(15));
                     
-                    var trace =
-                        (Agent.Tracer.CurrentSpan?.OutgoingDistributedTracingData
-                         ?? Agent.Tracer.CurrentTransaction?.OutgoingDistributedTracingData).SerializeToString();
+                    var trace = trans.OutgoingDistributedTracingData.SerializeToString();
                     
                     await context.Response.WriteAsync($"<a href=\"/trans1/3?s={trace}\">Continue</a>");
                 });
@@ -91,7 +90,31 @@ namespace TestElasticApm
 
                     trans.End();
                     
-                    await context.Response.WriteAsync($"<a href=\"/trans1\">Start over</a> / <a href=\"/\">Exit</a>");
+                    await context.Response.WriteAsync($"<a href=\"/trans1/1\">Restart</a> / <a href=\"/\">Exit</a>");
+                });
+                
+                endpoints.MapGet("/trans2", async context =>
+                {
+                    // transaction 1
+                    var trans1 = Agent.Tracer.StartTransaction("Dist Trans 2", ApiConstants.TypeRequest);
+
+                    await trans1.CaptureSpan("step 1 processing", ApiConstants.ActionExec, async () => await Task.Delay(30));
+                    
+                    // transaction 2
+                    var trans2 = Agent.Tracer.StartTransaction("Dist Trans 2", ApiConstants.TypeRequest,
+                        DistributedTracingData.TryDeserializeFromString(trans1.OutgoingDistributedTracingData.SerializeToString()));
+
+                    await trans2.CaptureSpan("step 2 processing", ApiConstants.ActionExec, async () => await Task.Delay(30));
+                    
+                    // transaction 3
+                    var trans3 = Agent.Tracer.StartTransaction("Dist Trans 2", ApiConstants.TypeRequest,
+                        DistributedTracingData.TryDeserializeFromString(trans2.OutgoingDistributedTracingData.SerializeToString()));
+
+                    await trans3.CaptureSpan("step 3 processing", ApiConstants.ActionExec, async () => await Task.Delay(30));
+
+                    trans3.End();
+                    
+                    await context.Response.WriteAsync($"<a href=\"/trans2\">Restart</a> / <a href=\"/\">Exit</a>");
                 });
             });
         }
